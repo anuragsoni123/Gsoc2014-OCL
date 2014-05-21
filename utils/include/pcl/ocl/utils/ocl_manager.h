@@ -1,0 +1,38 @@
+#ifdef __APPLE__
+#include <OpenCl/cl.hpp>
+#else
+#include <CL/cl.hpp>
+#endif
+
+#include <iostream>
+#include <stdio.h>
+
+using namespace std;
+
+#ifndef __OCLManager__
+#define __OCLManager__
+
+class OCLManager {
+	public:
+                OCLManager() {}
+		~OCLManager(){}
+		static OCLManager* getInstance();
+		void destroyInstance();
+		cl::Context getContext();
+		cl::CommandQueue getQueue();
+		cl::Program buildProgramFromSource(string& filename);
+		cl::Program buildProgramFromBinary(string& filename);
+		void saveBinary(cl::Program* program, string& filename);
+		
+		private:
+		vector<cl::Platform> platforms;
+		vector<cl::Device> devices;
+		cl::Context context;
+		cl::CommandQueue queue;
+		void initCL();
+		void createDevicesAndContext();
+		
+		static OCLManager* m_pInstance;
+};
+#endif
+

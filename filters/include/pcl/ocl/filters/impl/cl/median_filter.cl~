@@ -1,0 +1,13 @@
+/*struct PointXYZ
+{
+  float x;
+  float y;
+  float z;
+  float padding;
+};
+*/
+__kernel void median_filter_kernel(__global float *A, __global float *B) 
+{
+    
+ 
+}
