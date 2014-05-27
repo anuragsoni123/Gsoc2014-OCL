@@ -61,19 +61,12 @@ pcl::ocl::MedianFilter<PointT>::applyFilter (PointCloud &output)
   }
 
   // Copy everything from the input cloud to the output cloud (takes care of all the fields)
-  //copyPointCloud (*input_, output);
-  output.header   = input_->header;
-  output.width    = input_->width;
-  output.height   = input_->height;
-  output.is_dense = input_->is_dense;
-  output.sensor_orientation_ = input_->sensor_orientation_;
-  output.sensor_origin_ = input_->sensor_origin_;
-  output.points.resize (input_->points.size ());
-  
+  copyPointCloud (*input_, output);
  
   int height = static_cast<int> (output.height);
   int width = static_cast<int> (output.width);
- 
+  
+  cl_int ret;
   OCLManager *test1;
   test1 = test1->getInstance();
 
@@ -84,52 +77,33 @@ pcl::ocl::MedianFilter<PointT>::applyFilter (PointCloud &output)
   Program program = test1->buildProgramFromBinary(sourceFile);  
   
   // Make kernel
-  Kernel kernel(program, "median_filter_kernel");
+  Kernel kernel(program, "median_filter_kernel",&ret);
     
   // Create memory buffers
-  Buffer bufferA(context, CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR,  height * width * sizeof(PointT), (void *)&(input_->points[0]));
-  Buffer bufferB(context, CL_MEM_READ_WRITE, height * width * sizeof(PointT));
-  
-  // Copy Buffer A to Buffer B
-  queue.enqueueCopyBuffer(bufferA, bufferB, 0, 0, height * width* sizeof(PointT));
-  
-  //Buffer bufferB(context, CL_MEM_READ_WRITE|CL_MEM_COPY_HOST_PTR, height * width * sizeof(PointT),  &(output.points[0]));
+  Buffer bufferA = Buffer(context, CL_MEM_READ_ONLY,  height * width * sizeof(PointT));
+  Buffer bufferB = Buffer(context, CL_MEM_WRITE_ONLY, height * width * sizeof(PointT));
 
-  //Buffer bufferA(context, CL_MEM_READ_ONLY,  height * width * sizeof(PointT));
-  //Buffer bufferB(context, CL_MEM_READ_WRITE|CL_MEM_COPY_HOST_PTR, height * width * sizeof(PointT));
-  //ret = queue.enqueueWriteBuffer(bufferA, CL_TRUE, 0, height * width* sizeof(PointT),&(input_->points[0].x));
-  //ret = queue.enqueueWriteBuffer(bufferB, CL_TRUE, 0, height * width * sizeof(PointT), &(output.points[0]));
+  ret = queue.enqueueWriteBuffer(bufferA, CL_TRUE, 0, height * width* sizeof(PointT),&(input_->points[0].x));
+  ret = queue.enqueueWriteBuffer(bufferB, CL_TRUE, 0, height * width * sizeof(PointT), &(output.points[0]));
   
   // Set arguments to kernel
-  kernel.setArg(0, bufferA);
-  kernel.setArg(1, bufferB);
+  ret = kernel.setArg(0, bufferA);
+  ret = kernel.setArg(1, bufferB);
   
-  kernel.setArg(2, sizeof(int), (void *)&width);
-  kernel.setArg(3, sizeof(int), (void *)&height);
-  kernel.setArg(4, sizeof(int), (void *)&window_size_);
-  kernel.setArg(5, sizeof(float), (void *)&max_allowed_movement_);
-  int BlockSize = 11;
-  LocalSpaceArg l_arg = cl::__local((BlockSize+window_size_-1) * (BlockSize+window_size_-1) * sizeof(float));
-  kernel.setArg(6, l_arg);
-  
-  int SizeX = ((width+BlockSize-1)/BlockSize)*BlockSize;
-  int SizeY = ((height+BlockSize-1)/BlockSize)*BlockSize;
-  
-  NDRange global(SizeX,SizeY);
-  NDRange local(BlockSize,BlockSize);
-  //NDRange global(height);
-  //NDRange local(1);
+  ret = kernel.setArg(2, sizeof(int), (void *)&width);
+  ret = kernel.setArg(3, sizeof(int), (void *)&height);
+  ret = kernel.setArg(4, sizeof(int), (void *)&window_size_);
+  ret = kernel.setArg(5, sizeof(float), (void *)&max_allowed_movement_);
 
-  queue.enqueueNDRangeKernel(kernel,NullRange, global,local);
-  
-  void * mappedMemory;
-  // Map Buffer B to the host
-  mappedMemory = queue.enqueueMapBuffer(bufferB, CL_TRUE, CL_MAP_READ, 0, height * width * sizeof(PointT));
 
-  // Transfer memory on the host and unmap the buffer
-  memcpy(&(output.points[0]), mappedMemory, height * width * sizeof(PointT));
-  queue.enqueueUnmapMemObject(bufferB, mappedMemory);
-  //queue.enqueueReadBuffer(bufferB, CL_TRUE, 0, height * width * sizeof(PointT)  , &(output.points[0]));
+  //NDRange global(height,width);
+  //NDRange local(1,1);
+  NDRange global(height);
+  NDRange local(1);
+
+  ret = queue.enqueueNDRangeKernel(kernel,NullRange, global,local);
+  
+  ret = queue.enqueueReadBuffer(bufferB, CL_TRUE, 0, height * width * sizeof(PointT)  , &(output.points[0]));
   test1->destroyInstance();
     
 }
