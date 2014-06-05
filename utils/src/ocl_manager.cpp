@@ -56,7 +56,7 @@ void OCLManager::createDevicesAndContext()
          gpu_devices = context.getInfo<CL_CONTEXT_DEVICES>();
          for(i=0; i<gpu_devices.size(); i++) {
             device_name = gpu_devices[i].getInfo<CL_DEVICE_NAME>();
-            cout << "Device: " << device_name.c_str() << endl;
+            //cout << "Device: " << device_name.c_str() << endl;
          }
          #endif
       if(gpu_devices.size()==0){
@@ -71,7 +71,7 @@ void OCLManager::createDevicesAndContext()
          cpu_devices = context.getInfo<CL_CONTEXT_DEVICES>();
          for(i=0; i<cpu_devices.size(); i++) {
             device_name = cpu_devices[i].getInfo<CL_DEVICE_NAME>();
-            cout << "Device: " << device_name.c_str() << endl;
+            //cout << "Device: " << device_name.c_str() << endl;
          }
          #endif
       }
@@ -88,7 +88,7 @@ void OCLManager::createDevicesAndContext()
          for(i=0; i<acc_devices.size(); i++) {
             device_name = acc_devices[i].getInfo<CL_DEVICE_NAME>();
             cout<<" "<<endl<<endl<<endl;
-            cout << "Device: " << device_name.c_str() << endl;
+            //cout << "Device: " << device_name.c_str() << endl;
          }
          #endif
        }
@@ -126,8 +126,6 @@ cl::CommandQueue OCLManager::getQueue(){
 	 	cl::Program::Sources source(1, std::make_pair(programString.c_str(),programString.length()+1));
 	 	cl::Program program(context, source);
 	 	cl_int ret = program.build(devices);
-                if(ret != CL_SUCCESS)
-                  printf("\nProgram Build Error");
                    
     return program;
 }
@@ -174,3 +172,9 @@ cl::CommandQueue OCLManager::getQueue(){
       binaryfile.write(binaries[i], binSizes[i]); 
 
  }
+//cl::Device getdevice() ;
+cl::Device OCLManager::getdevice()
+{
+
+ return devices[0];
+}

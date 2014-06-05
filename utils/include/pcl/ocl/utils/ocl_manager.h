@@ -23,6 +23,7 @@ class OCLManager {
 		cl::Program buildProgramFromSource(string& filename);
 		cl::Program buildProgramFromBinary(string& filename);
 		void saveBinary(cl::Program* program, string& filename);
+                cl::Device getdevice() ;     
 		
 		private:
 		vector<cl::Platform> platforms;
@@ -31,7 +32,6 @@ class OCLManager {
 		cl::CommandQueue queue;
 		void initCL();
 		void createDevicesAndContext();
-		
 		static OCLManager* m_pInstance;
 };
 #endif

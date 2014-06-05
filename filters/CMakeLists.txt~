@@ -12,7 +12,8 @@ if(BUILD_OCL)
 	set(srcs
 	src/VectorAddition.cpp
         src/median_filter.cpp
-        #src/passthrough.cpp
+        src/passthrough.cpp
+        src/radius_outlier_removal.cpp
         #src/statisticalOutlierRemoval.cpp
         #src/voxelgrid.cpp
         )
@@ -26,7 +27,7 @@ if(BUILD_OCL)
         #include/pcl/ocl/filters/impl/cl/total_reduction.cl
         )
     set(clbins
-        include/pcl/ocl/filters/impl/cl/median_filter.cl
+        include/pcl/ocl/filters/impl/cl/median_filter.clbin
         #include/pcl/ocl/filters/impl/cl/passthrough.cl
         #include/pcl/ocl/filters/impl/cl/statistical_outlier_removal.clbin
         #include/pcl/ocl/filters/impl/cl/min_max_3d.clbin
@@ -37,15 +38,16 @@ if(BUILD_OCL)
 	set(incs
          include/pcl/ocl/filters/VectorAddition.h
          include/pcl/ocl/filters/median_filter.h
-        #include/pcl/ocl/filters/passthrough.h
+         include/pcl/ocl/filters/passthrough.h
+         include/pcl/ocl/filters/radius_outlier_removal.h
         #include/pcl/ocl/filters/statistical_outlier_removal.h
         #include/pcl/ocl/filters/voxel_grid.h
         )
         
 	set(impl_incs
         include/pcl/ocl/filters/impl/median_filter.hpp
-        #include/pcl/ocl/filters/impl/passthrough.hpp
-        #include/pcl/ocl/filters/impl/statistical_outlier_removal.hpp
+        include/pcl/ocl/filters/impl/passthrough.hpp
+        include/pcl/ocl/filters/impl/radius_outlier_removal.hpp
         #include/pcl/ocl/filters/impl/voxel_grid.hpp
         )
         

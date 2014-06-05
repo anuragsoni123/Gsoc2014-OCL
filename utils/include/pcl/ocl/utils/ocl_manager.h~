@@ -14,6 +14,8 @@ using namespace std;
 
 class OCLManager {
 	public:
+                OCLManager() {}
+		~OCLManager(){}
 		static OCLManager* getInstance();
 		void destroyInstance();
 		cl::Context getContext();
@@ -21,6 +23,7 @@ class OCLManager {
 		cl::Program buildProgramFromSource(string& filename);
 		cl::Program buildProgramFromBinary(string& filename);
 		void saveBinary(cl::Program* program, string& filename);
+                //vector<cl::Device> devices;     
 		
 		private:
 		vector<cl::Platform> platforms;
@@ -29,8 +32,7 @@ class OCLManager {
 		cl::CommandQueue queue;
 		void initCL();
 		void createDevicesAndContext();
-		OCLManager() {}
-		~OCLManager(){}
+		
 		static OCLManager* m_pInstance;
 };
 #endif

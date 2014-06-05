@@ -42,7 +42,6 @@
 
 #include <pcl/ocl/filters/median_filter.h>
 #include <pcl/common/io.h>
-#include <stdio.h>
 #include<pcl/ocl/utils/ocl_manager.h>
 #include<CL/cl.hpp>
 #include <iostream>
@@ -93,13 +92,6 @@ pcl::ocl::MedianFilter<PointT>::applyFilter (PointCloud &output)
   // Copy Buffer A to Buffer B
   queue.enqueueCopyBuffer(bufferA, bufferB, 0, 0, height * width* sizeof(PointT));
   
-  //Buffer bufferB(context, CL_MEM_READ_WRITE|CL_MEM_COPY_HOST_PTR, height * width * sizeof(PointT),  &(output.points[0]));
-
-  //Buffer bufferA(context, CL_MEM_READ_ONLY,  height * width * sizeof(PointT));
-  //Buffer bufferB(context, CL_MEM_READ_WRITE|CL_MEM_COPY_HOST_PTR, height * width * sizeof(PointT));
-  //ret = queue.enqueueWriteBuffer(bufferA, CL_TRUE, 0, height * width* sizeof(PointT),&(input_->points[0].x));
-  //ret = queue.enqueueWriteBuffer(bufferB, CL_TRUE, 0, height * width * sizeof(PointT), &(output.points[0]));
-  
   // Set arguments to kernel
   kernel.setArg(0, bufferA);
   kernel.setArg(1, bufferB);
@@ -108,18 +100,32 @@ pcl::ocl::MedianFilter<PointT>::applyFilter (PointCloud &output)
   kernel.setArg(3, sizeof(int), (void *)&height);
   kernel.setArg(4, sizeof(int), (void *)&window_size_);
   kernel.setArg(5, sizeof(float), (void *)&max_allowed_movement_);
-  int BlockSize = 11;
+  int BlockSize = 32;
   LocalSpaceArg l_arg = cl::__local((BlockSize+window_size_-1) * (BlockSize+window_size_-1) * sizeof(float));
   kernel.setArg(6, l_arg);
+
   
   int SizeX = ((width+BlockSize-1)/BlockSize)*BlockSize;
   int SizeY = ((height+BlockSize-1)/BlockSize)*BlockSize;
   
   NDRange global(SizeX,SizeY);
   NDRange local(BlockSize,BlockSize);
-  //NDRange global(height);
-  //NDRange local(1);
+  //NDRange global(width,height);
+  //NDRange local(1,1);
 
+ /* 
+  //int work_group_size = kernel.getWorkGroupInfo<CL_KERNEL_WORK_GROUP_SIZE>(test1->devices[0]);
+int private_mem_size = kernel.getWorkGroupInfo<CL_KERNEL_PRIVATE_MEM_SIZE>(test1->devices[0]);
+  std::cout<<"Kernel group size: "<< private_mem_size << std::endl;
+  cl_ulong local_mem_size = kernel.getWorkGroupInfo<CL_KERNEL_LOCAL_MEM_SIZE>(test1->devices[0]);
+  std::cout<<"Kernel local mem size: "<< local_mem_size << std::endl;
+  
+  cl::size_t<3> a = kernel.getWorkGroupInfo<CL_KERNEL_COMPILE_WORK_GROUP_SIZE>(test1->devices[0]);
+  std::cout<<"CL_KERNEL_COMPILE_WORK_GROUP_SIZE: "<< a[0]<< a[1] <<a[2]<< std::endl;
+ 
+  cl::size_t<3> a1 = kernel.getWorkGroupInfo<CL_KERNEL_GLOBAL_WORK_GROUP_SIZE>(test1->devices[0]);
+  std::cout<<"CL_KERNEL_COMPILE_WORK_GROUP_SIZE: "<< a1[0]<< a1[1] <<a1[2]<< std::endl;
+*/
   queue.enqueueNDRangeKernel(kernel,NullRange, global,local);
   
   void * mappedMemory;
@@ -129,7 +135,6 @@ pcl::ocl::MedianFilter<PointT>::applyFilter (PointCloud &output)
   // Transfer memory on the host and unmap the buffer
   memcpy(&(output.points[0]), mappedMemory, height * width * sizeof(PointT));
   queue.enqueueUnmapMemObject(bufferB, mappedMemory);
-  //queue.enqueueReadBuffer(bufferB, CL_TRUE, 0, height * width * sizeof(PointT)  , &(output.points[0]));
   test1->destroyInstance();
     
 }

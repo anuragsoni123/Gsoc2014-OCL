@@ -42,19 +42,20 @@
 
 #include <pcl/ocl/filters/passthrough.h>
 #include <pcl/common/io.h>
-
+#include<pcl/ocl/utils/ocl_manager.h>
+using namespace cl;
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 template <typename PointT> void
 pcl::ocl::PassThrough<PointT>::applyFilter (PointCloud &output)
 {
   std::vector<int> indices;
+  removed_indices_->resize (indices_->size ());
   if (keep_organized_)
-  {
+  { 
     bool temp = extract_removed_indices_;
     extract_removed_indices_ = true;
     applyFilterIndices (indices);
     extract_removed_indices_ = temp;
-
     output = *input_;
     for (int rii = 0; rii < static_cast<int> (removed_indices_->size ()); ++rii)  // rii = removed indices iterator
       output.points[(*removed_indices_)[rii]].x = output.points[(*removed_indices_)[rii]].y = output.points[(*removed_indices_)[rii]].z = user_filter_value_;
@@ -65,42 +66,86 @@ pcl::ocl::PassThrough<PointT>::applyFilter (PointCloud &output)
   {
     output.is_dense = true;
     applyFilterIndices (indices);
-    copyPointCloud (*input_, indices, output);
-  }
+    int oii=0, rii=0;
+    output.points.resize (indices.size());
+    output.header   = input_->header;
+    output.height   = 1;
+    output.is_dense = input_->is_dense;
+    output.sensor_orientation_ = input_->sensor_orientation_;
+    output.sensor_origin_ = input_->sensor_origin_;
+   
+    for(int i =0; i<10;i++)
+      cout << indices[i];
+    for(int i =0; i<indices.size(); i++)
+     { 
+        if(indices[i]==1) 
+          output.points[oii++] = input_->points[i];
+        else
+        {
+          if (extract_removed_indices_)
+            (*removed_indices_)[rii++]=i;
+        }
+          
+     }
+       output.points.resize(oii);
+       output.width = oii;
+       removed_indices_->resize (rii);     
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 template <typename PointT> void
-pcl::PassThrough<PointT>::applyFilterIndices (std::vector<int> &indices)
+pcl::ocl::PassThrough<PointT>::applyFilterIndices (std::vector<int> &indices)
 {
   // The arrays to be used
   indices.resize (indices_->size ());
   removed_indices_->resize (indices_->size ());
-  int oii = 0, rii = 0;  // oii = output indices iterator, rii = removed indices iterator
+  
+  OCLManager *pt;
+  pt = pt->getInstance();
 
+  Context context = pt->getContext();
+  CommandQueue queue = pt->getQueue();
+
+  std::string sourceFile("passthrough.clbin");
+  Program program = pt->buildProgramFromBinary(sourceFile);  
+  
+  
   // Has a field name been specified?
   if (filter_field_name_.empty ())
   {
-    // Only filter for non-finite entries then
-    for (int iii = 0; iii < static_cast<int> (indices_->size ()); ++iii)  // iii = input indices iterator
-    {
-      // Non-finite entries are always passed to removed indices
-      if (!pcl_isfinite (input_->points[(*indices_)[iii]].x) ||
-          !pcl_isfinite (input_->points[(*indices_)[iii]].y) ||
-          !pcl_isfinite (input_->points[(*indices_)[iii]].z))
-      {
-        if (extract_removed_indices_)
-          (*removed_indices_)[rii++] = (*indices_)[iii];
-        continue;
-      }
-      indices[oii++] = (*indices_)[iii];
-    }
+     // Make kernel
+    Kernel kernel(program, "remove_NAN_kernel");
+    int size = indices_->size();
+    cout << "\n\ninside Remove NAN";
+   // Create memory buffers
+    Buffer bufferInput(context, CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR,  input_->height * input_->width * sizeof(PointT), (void *)&(input_->points[0]));
+    
+    Buffer buffer_indices(context, CL_MEM_WRITE_ONLY|CL_MEM_COPY_HOST_PTR, size * sizeof(int), &indices[0]);  
+    
+    //Buffer points(context, CL_MEM_READ_WRITE|CL_MEM_COPY_HOST_PTR, 2*sizeof(int), total_points);  
+    
+    // Set arguments to kernel
+    kernel.setArg(0, bufferInput);
+    kernel.setArg(1, buffer_indices);
+    kernel.setArg(2, sizeof(int), (void *)&size);
+    int BlockSize = 1024;
+    
+    int SizeX = ((size+BlockSize-1)/BlockSize)*BlockSize;
+   
+    NDRange global(SizeX);
+    NDRange local(BlockSize);
+   
+    queue.enqueueNDRangeKernel(kernel,NullRange, global,local);
+    queue.enqueueReadBuffer(buffer_indices, CL_TRUE, 0, size * sizeof(int), &(indices[0]));
   }
   else
   {
     // Attempt to get the field name's index
     std::vector<pcl::PCLPointField> fields;
     int distance_idx = pcl::getFieldIndex (*input_, filter_field_name_, fields);
+
+    //cout << "\n " << distance_idx;
     if (distance_idx == -1)
     {
       PCL_WARN ("[pcl::%s::applyFilter] Unable to find field name in point type.\n", getClassName ().c_str ());
@@ -109,56 +154,34 @@ pcl::PassThrough<PointT>::applyFilterIndices (std::vector<int> &indices)
       return;
     }
 
-    // Filter for non-finite entries and the specified field limits
-    for (int iii = 0; iii < static_cast<int> (indices_->size ()); ++iii)  // iii = input indices iterator
-    {
-      // Non-finite entries are always passed to removed indices
-      if (!pcl_isfinite (input_->points[(*indices_)[iii]].x) ||
-          !pcl_isfinite (input_->points[(*indices_)[iii]].y) ||
-          !pcl_isfinite (input_->points[(*indices_)[iii]].z))
-      {
-        if (extract_removed_indices_)
-          (*removed_indices_)[rii++] = (*indices_)[iii];
-        continue;
-      }
-
-      // Get the field's value
-      const uint8_t* pt_data = reinterpret_cast<const uint8_t*> (&input_->points[(*indices_)[iii]]);
-      float field_value = 0;
-      memcpy (&field_value, pt_data + fields[distance_idx].offset, sizeof (float));
-
-      // Remove NAN/INF/-INF values. We expect passthrough to output clean valid data.
-      if (!pcl_isfinite (field_value))
-      {
-        if (extract_removed_indices_)
-          (*removed_indices_)[rii++] = (*indices_)[iii];
-        continue;
-      }
-
-      // Outside of the field limits are passed to removed indices
-      if (!negative_ && (field_value < filter_limit_min_ || field_value > filter_limit_max_))
-      {
-        if (extract_removed_indices_)
-          (*removed_indices_)[rii++] = (*indices_)[iii];
-        continue;
-      }
-
-      // Inside of the field limits are passed to removed indices if negative was set
-      if (negative_ && field_value >= filter_limit_min_ && field_value <= filter_limit_max_)
-      {
-        if (extract_removed_indices_)
-          (*removed_indices_)[rii++] = (*indices_)[iii];
-        continue;
-      }
-
-      // Otherwise it was a normal point for output (inlier)
-      indices[oii++] = (*indices_)[iii];
-    }
+    Kernel kernel(program, "passthrough");
+    int size = indices_->size();
+     // Create memory buffers
+    Buffer bufferInput(context, CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR,  input_->height * input_->width * sizeof(PointT), (void *)&(input_->points[0]));
+    Buffer buffer_indices(context, CL_MEM_WRITE_ONLY|CL_MEM_COPY_HOST_PTR, size * sizeof(int), &indices[0]);  
+ 
+    // Set arguments to kernel
+    kernel.setArg(0, bufferInput);
+    kernel.setArg(1, buffer_indices);
+    kernel.setArg(2, sizeof(int), (void *)&size);
+    kernel.setArg(3, sizeof(int), (void *)&distance_idx);
+    kernel.setArg(4, sizeof(float), (void *)&filter_limit_min_);
+    kernel.setArg(5, sizeof(float), (void *)&filter_limit_max_);
+    kernel.setArg(6, sizeof(int), (void *)&negative_);
+    
+    int BlockSize = 1024;
+    int SizeX = ((size+BlockSize-1)/BlockSize)*BlockSize;
+   
+    NDRange global(SizeX);
+    NDRange local(BlockSize);
+    cl_uint ret;
+    queue.enqueueNDRangeKernel(kernel,NullRange, global,local);
+    //queue.enqueueReadBuffer(points, CL_TRUE, 0,  2*sizeof(int), total_points);
+    queue.enqueueReadBuffer(buffer_indices, CL_TRUE, 0, size * sizeof(int), &(indices[0]));
+    
   }
 
-  // Resize the output arrays
-  indices.resize (oii);
-  removed_indices_->resize (rii);
+  pt->destroyInstance();  
 }
 
 #define PCL_INSTANTIATE_PassThroughOCL(T) template class PCL_EXPORTS pcl::ocl::PassThrough<T>;

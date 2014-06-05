@@ -1,0 +1,386 @@
+/*
+ * Software License Agreement (BSD License)
+ *
+ *  Point Cloud Library (PCL) - www.pointclouds.org
+ *  Copyright (c) 2010-2012, Willow Garage, Inc.
+ *
+ *  All rights reserved.
+ *
+ *  Redistribution and use in source and binary forms, with or without
+ *  modification, are permitted provided that the following conditions
+ *  are met:
+ *
+ *   * Redistributions of source code must retain the above copyright
+ *     notice, this list of conditions and the following disclaimer.
+ *   * Redistributions in binary form must reproduce the above
+ *     copyright notice, this list of conditions and the following
+ *     disclaimer in the documentation and/or other materials provided
+ *     with the distribution.
+ *   * Neither the name of the copyright holder(s) nor the names of its
+ *     contributors may be used to endorse or promote products derived
+ *     from this software without specific prior written permission.
+ *
+ *  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ *  "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ *  LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+ *  FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+ *  COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+ *  INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+ *  BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+ *  LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+ *  CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
+ *  ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ *  POSSIBILITY OF SUCH DAMAGE.
+ *
+ * $Id$
+ *
+ */
+
+#ifndef PCL_OCL_FILTERS_IMPL_RADIUS_OUTLIER_REMOVAL_H_
+#define PCL_OCL_FILTERS_IMPL_RADIUS_OUTLIER_REMOVAL_H_
+
+#include <pcl/ocl/filters/radius_outlier_removal.h>
+#include <pcl/common/io.h>
+#include<iostream>
+#include <pcl/common/eigen.h>
+#include <pcl/ocl/filters/passthrough.h>
+#include<pcl/ocl/utils/ocl_manager.h>
+using namespace cl;
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+template <typename PointT> void
+pcl::ocl::RadiusOutlierRemoval<PointT>::applyFilter (PointCloud &output)
+{
+
+  mask_1.resize (input_->size ());
+  if (indices_.get () != NULL && indices_->size () != 0)
+  {
+    mask_1.assign (input_->size (), 0);
+    for (std::vector<int>::const_iterator iIt = indices_->begin (); iIt != indices_->end (); ++iIt)
+      mask_1[*iIt] = 1;
+  }
+  else
+    mask_1.assign (input_->size (), 1);
+	
+  estimateProjectionMatrix1();
+  for(int i =0 ; i< 9; i++)
+    cout << "\n Matrix " <<KR_1.coeff(i) << " " << KR_KRT_1.coeff(i) << " "<<projection_matrix_1.coeff(i);
+
+    
+  std::vector<int> indices;
+  if (keep_organized_)
+  {
+    bool temp = extract_removed_indices_;
+    extract_removed_indices_ = true;
+    applyFilterIndices (indices);
+    extract_removed_indices_ = temp;
+    output = *input_;
+    for (int rii = 0; rii < static_cast<int> (removed_indices_->size ()); ++rii)  // rii = removed indices iterator
+      output.points[(*removed_indices_)[rii]].x = output.points[(*removed_indices_)[rii]].y = output.points[(*removed_indices_)[rii]].z = user_filter_value_;
+    if (!pcl_isfinite (user_filter_value_))
+      output.is_dense = false;
+  }
+  else
+  {
+    applyFilterIndices (indices);
+    //copyPointCloud (*input_, indices, output);
+    int oii=0;
+    output.points.resize (indices.size());
+    output.header   = input_->header;
+    output.height   = 1;
+    output.is_dense = input_->is_dense;
+    output.sensor_orientation_ = input_->sensor_orientation_;
+    output.sensor_origin_ = input_->sensor_origin_;
+   
+    for(int i =0; i<indices.size(); i++)
+     { 
+        if(indices[i]) 
+          output.points[oii++] = input_->points[i];
+        if(i<10)
+        cout << "\n\n" << indices[i]<< "\n\n";
+     }
+       output.points.resize (oii);
+       output.width = oii;
+    }
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+template <typename PointT> void
+pcl::ocl::RadiusOutlierRemoval<PointT>::applyFilterIndices (std::vector<int> &indices)
+{
+  
+  if (search_radius_ == 0.0)
+  {
+    PCL_ERROR ("[pcl::%s::applyFilter] No radius defined!\n", getClassName ().c_str ());
+    indices.clear ();
+    removed_indices_->clear ();
+    return;
+  }
+ 
+  OCLManager *ror;
+  ror = ror->getInstance();
+
+  Context context = ror->getContext();
+  CommandQueue queue = ror->getQueue();
+
+  std::string sourceFile("radius_outliner_removal.clbin");
+  Program program = ror->buildProgramFromBinary(sourceFile); 
+ // Initialize the search class
+  /*if (!searcher_)
+  {
+    if (input_->isOrganized ())
+      searcher_.reset (new pcl::search::OrganizedNeighbor<PointT> ());
+    else
+      searcher_.reset (new pcl::search::KdTree<PointT> (false));
+  }*/
+  //searcher_->setInputCloud (input_);
+  //float * coeff = (float *)&(KR_1.coeff(0));
+  //for(int i=0;i<9;i++)
+    //std::cout << "\n "<<*(coeff+i)<< " "<<KR_1.coeff(i);
+  // The arrays to be used
+  std::vector<int> nn_indices (indices_->size ());
+  std::vector<float> nn_dists (indices_->size ());
+  indices.resize (indices_->size ());
+  removed_indices_->resize (indices_->size ());
+  int oii = 0, rii = 0;  // oii = output indices iterator, rii = removed indices iterator
+ 
+  int size = indices_->size(); 
+ //std::cout << indices_->size ();
+  //indices.assign (input_->size (), 0.0);
+    
+  Kernel kernel(program, "ror_kernel");
+  
+    
+  // Create memory buffers
+  Buffer bufferInput(context, CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR,  input_->height * input_->width * sizeof(PointT), (void *)&(input_->points[0]));
+  //Buffer buffer_mask(context, CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR, size * sizeof(int), &mask_1[0]);
+  Buffer buffer_indices(context, CL_MEM_WRITE_ONLY|CL_MEM_COPY_HOST_PTR, size * sizeof(int), &indices[0]);  
+  Buffer buffer_CamMatrix(context, CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR, 3 * 3 * sizeof(float), (float *)&(KR_1.coeff(0)));
+  Buffer buffer_CamMatrixT(context, CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR, 3 * 3 * sizeof(float), (float *)&(KR_KRT_1.coeff(0)));
+  Buffer buffer_ProjMatrix(context, CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR, 3 * 4 * sizeof(float), (float *)&(projection_matrix_1.coeff(0)));
+  cl_int ret;
+  float radius = 0.8;
+  // Set arguments to kernel
+  ret = kernel.setArg(0, bufferInput);
+  ret = kernel.setArg(1, buffer_indices);
+  //ret = kernel.setArg(2, buffer_mask);
+  ret = kernel.setArg(2, buffer_CamMatrix);
+  ret = kernel.setArg(3, buffer_CamMatrixT);
+  ret = kernel.setArg(4, buffer_ProjMatrix);
+  ret = kernel.setArg(5, sizeof(float), &radius);
+  ret = kernel.setArg(6, sizeof(int), (void *)&size);
+  ret = kernel.setArg(7, sizeof(int), (void *)&min_pts_radius_);
+  ret = kernel.setArg(8, sizeof(int), (void *)&input_->width);
+  ret = kernel.setArg(9, sizeof(int), (void *)&input_->height);
+  
+  int BlockSize = 256;
+  int SizeX = ((size+BlockSize-1)/BlockSize)*BlockSize;
+  std::cout<< "\n\n\nrunning Kernel";
+  NDRange global(SizeX);
+  NDRange local(BlockSize);
+  ret = queue.enqueueNDRangeKernel(kernel,NullRange, global,local);
+  if(ret !=CL_SUCCESS)
+     std::cout << "\n"<<ret;
+
+  ret = queue.enqueueReadBuffer(buffer_indices, CL_TRUE, 0, size * sizeof(int), &(indices[0]));
+  if(ret !=CL_SUCCESS)
+     std::cout << "\n\nread"<<ret;
+
+  /*for (std::vector<int>::const_iterator it = indices_->begin (); it != indices_->end (); ++it)
+  {
+    // Perform the radius search
+    // Note: k includes the query point, so is always at least 1
+    //int k = searcher_->radiusSearch (*it, search_radius_, nn_indices, nn_dists);
+    
+    int k = radiussearch (input_->points[*it], search_radius_, nn_indices, nn_dists);
+
+    // Points having too few neighbors are outliers and are passed to removed indices
+    // Unless negative was set, then it's the opposite condition
+    if ((!negative_ && k <= min_pts_radius_) || (negative_ && k > min_pts_radius_))
+    {
+      if (extract_removed_indices_)
+        (*removed_indices_)[rii++] = *it;
+      continue;
+    }
+
+    // Otherwise it was a normal point for output (inlier)
+    indices[oii++] = *it;
+  }
+
+  // Resize the output arrays
+  indices.resize (oii);
+  removed_indices_->resize (rii);*/
+  ror->destroyInstance();
+}
+
+//////////////////////////////////////////////////////////////////////////////////////////////
+template<typename PointT> void
+pcl::ocl::RadiusOutlierRemoval<PointT>::estimateProjectionMatrix1 ()
+{
+  // internally we calculate with double but store the result into float matrices.
+  projection_matrix_1.setZero ();
+  if (input_->height == 1 || input_->width == 1)
+  {
+    PCL_ERROR ("[pcl::%s::estimateProjectionMatrix] Input dataset is not organized!\n");
+    return;
+  }
+  
+  const unsigned ySkip = (std::max) (input_->height >> pyramid_level_1, unsigned (1));
+  const unsigned xSkip = (std::max) (input_->width >> pyramid_level_1, unsigned (1));
+
+ // std::cout << "\n\n Inside Projection Matrix";
+  std::vector<int> indices;
+  indices.reserve (input_->size () >> (pyramid_level_1 << 1));
+  
+  for (unsigned yIdx = 0, idx = 0; yIdx < input_->height; yIdx += ySkip, idx += input_->width * (ySkip - 1))
+  {
+    for (unsigned xIdx = 0; xIdx < input_->width; xIdx += xSkip, idx += xSkip)
+    {
+      if (!mask_1 [idx])
+        continue;
+
+      indices.push_back (idx);
+    }
+  }
+
+  double residual_sqr = pcl::estimateProjectionMatrix<PointT> (input_, projection_matrix_1, indices);
+  
+  if (fabs (residual_sqr) > eps_1 * float (indices.size ()))
+  {
+    PCL_ERROR ("[pcl::radiusSearch] Input dataset is not from a projective device!\nResidual (MSE) %f, using %d valid points\n", residual_sqr / double (indices.size()), indices.size ());
+    return;
+  }
+
+  // get left 3x3 sub matrix, which contains K * R, with K = camera matrix = [[fx s cx] [0 fy cy] [0 0 1]]
+  // and R being the rotation matrix
+  KR_1 = projection_matrix_1.topLeftCorner <3, 3> ();
+   // precalculate KR * KR^T needed by calculations during nn-search
+  KR_KRT_1 = KR_1 * KR_1.transpose ();
+}
+
+//////////////////////////////////////////////////////////////////////////////////////////////
+template<typename PointT> int
+pcl::ocl::RadiusOutlierRemoval<PointT>::radiussearch (const               PointT &query,
+                                                      const double        radius,
+                                                      std::vector<int>    &k_indices,
+                                                      std::vector<float>  &k_sqr_distances,
+                                                      unsigned int        max_nn) const
+{
+  // NAN test
+  assert (isFinite (query) && "Invalid (NaN, Inf) point coordinates given to nearestKSearch!");
+
+  // search window
+  unsigned left, right, top, bottom;
+  //unsigned x, y, idx;
+  float squared_distance;
+  double squared_radius;
+
+  k_indices.clear ();
+  k_sqr_distances.clear();
+
+  squared_radius = radius * radius;
+  //std::cout << "\n inside"<< query.x << query.y << query.z;
+  //this->getProjectedRadiusSearchBox (query, static_cast<float> (squared_radius), left, right, top, bottom);
+  
+
+  Eigen::Vector3f queryvec (query.x, query.y, query.z);
+  //Eigen::Vector3f q(KR_1 * queryvec + projection_matrix_1.block <3, 1> (0, 3));
+  Eigen::Vector3f q(0.0,0.0,0.0);
+  q[0] = KR_1.coeff(0)*query.x + KR_1.coeff(1)*query.y + KR_1.coeff(2)*query.z + projection_matrix_1.coeff(3);
+  q[1] = KR_1.coeff(3)*query.x + KR_1.coeff(4)*query.y + KR_1.coeff(5)*query.z + projection_matrix_1.coeff(7);
+  q[2] = KR_1.coeff(6)*query.x + KR_1.coeff(7)*query.y + KR_1.coeff(8)*query.z + projection_matrix_1.coeff(11);
+  
+  float a = squared_radius * KR_KRT_1.coeff (8) - q [2] * q [2];
+  float b = squared_radius * KR_KRT_1.coeff (7) - q [1] * q [2];
+  float c = squared_radius * KR_KRT_1.coeff (4) - q [1] * q [1];
+  int min, max;
+  // a and c are multiplied by two already => - 4ac -> - ac
+  float det = b * b - a * c;
+  if (det < 0)
+  {
+    top = 0;
+    bottom = input_->height - 1;
+  }
+  else
+  {
+    float y1 = static_cast<float> ((b - sqrt (det)) / a);
+    float y2 = static_cast<float> ((b + sqrt (det)) / a);
+
+    min = std::min (static_cast<int> (floor (y1)), static_cast<int> (floor (y2)));
+    max = std::max (static_cast<int> (ceil (y1)), static_cast<int> (ceil (y2)));
+    top = static_cast<unsigned> (std::min (static_cast<int> (input_->height) - 1, std::max (0, min)));
+    bottom = static_cast<unsigned> (std::max (std::min (static_cast<int> (input_->height) - 1, max), 0));
+  }
+
+  b = squared_radius * KR_KRT_1.coeff (6) - q [0] * q [2];
+  c = squared_radius * KR_KRT_1.coeff (0) - q [0] * q [0];
+
+  det = b * b - a * c;
+  if (det < 0)
+  {
+    left = 0;
+    right = input_->width - 1;
+  }
+  else
+  {
+    float x1 = static_cast<float> ((b - sqrt (det)) / a);
+    float x2 = static_cast<float> ((b + sqrt (det)) / a);
+
+    min = std::min (static_cast<int> (floor (x1)), static_cast<int> (floor (x2)));
+    max = std::max (static_cast<int> (ceil (x1)), static_cast<int> (ceil (x2)));
+    left = static_cast<unsigned> (std::min (static_cast<int> (input_->width)- 1, std::max (0, min)));
+    right = static_cast<unsigned> (std::max (std::min (static_cast<int> (input_->width) - 1, max), 0));
+  }
+  
+
+  // iterate over search box
+  if (max_nn == 0 || max_nn >= static_cast<unsigned int> (input_->points.size ()))
+    max_nn = static_cast<unsigned int> (input_->points.size ());
+
+  k_indices.reserve (max_nn);
+  k_sqr_distances.reserve (max_nn);
+
+  unsigned yEnd  = (bottom + 1) * input_->width + right + 1;
+  register unsigned idx  = top * input_->width + left;
+  unsigned skip = input_->width - right + left - 1;
+  unsigned xEnd = idx - left + right + 1;
+
+  for (; xEnd != yEnd; idx += skip, xEnd += input_->width)
+  {
+    for (; idx < xEnd; ++idx)
+    {
+      if (!mask_1[idx] || !isFinite (input_->points[idx]))
+        continue;
+
+      float dist_x = input_->points[idx].x - query.x;
+      float dist_y = input_->points[idx].y - query.y;
+      float dist_z = input_->points[idx].z - query.z;
+      squared_distance = dist_x * dist_x + dist_y * dist_y + dist_z * dist_z;
+      //squared_distance = (input_->points[idx].getVector3fMap () - query.getVector3fMap ()).squaredNorm ();
+      if (squared_distance <= squared_radius)
+      {
+        k_indices.push_back (idx);
+        k_sqr_distances.push_back (squared_distance);
+        // already done ?
+        if (k_indices.size () == max_nn)
+        {
+          //if (sorted_results_)
+            //this->sortResults (k_indices, k_sqr_distances);
+          return (max_nn);
+        }
+      }
+    }
+  }
+
+//std::cout<<"\nPoints : "<<  query.x << " " << query.y << " " <<query.z;
+//std::cout<<"\ndistan : "<<  left  << " "<< right << " "<< top << " "<< bottom;
+  //if (sorted_results_)
+    //this->sortResults (k_indices, k_sqr_distances);  
+  return (static_cast<int> (k_indices.size ()));
+}
+
+#define PCL_INSTANTIATE_RadiusOutlierRemovalOCL(T) template class PCL_EXPORTS pcl::ocl::RadiusOutlierRemoval<T>;
+
+#endif  // PCL_FILTERS_IMPL_RADIUS_OUTLIER_REMOVAL_H_
+
