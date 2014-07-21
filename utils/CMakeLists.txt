@@ -14,8 +14,12 @@ if(BUILD_OCL)
 	set(incs
         include/pcl/ocl/utils/ocl_manager.h
         )
+	set(impl_incs
+        include/pcl/ocl/utils/impl/ocl_kernel_builder.hpp
+	)
+       
     set(LIB_NAME pcl_${SUBSYS_NAME})
-    include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
+    include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include "/usr/local/include/pcl-1.7")
     include_directories(${OPENCL_INCLUDE_DIRS})
     PCL_ADD_LIBRARY(${LIB_NAME} ${SUBSYS_NAME} ${srcs} ${incs} ${impl_incs})
     target_link_libraries(${LIB_NAME} pcl_common ${OPENCL_LIBRARIES})
