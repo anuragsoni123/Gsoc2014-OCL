@@ -2,7 +2,7 @@
  * Software License Agreement (BSD License)
  *
  *  Point Cloud Library (PCL) - www.pointclouds.org
- *  Copyright (c) 2012-, Open Perception, Inc.
+ *  Copyright (c) 2010-2011, Willow Garage, Inc.
  *
  *  All rights reserved.
  *
@@ -33,13 +33,17 @@
  *  ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  *  POSSIBILITY OF SUCH DAMAGE.
  *
+ * $Id$
+ *
  */
 
-#include <pcl/ocl/search/impl/search.hpp>
+#ifndef PCL_SEARCH_PCL_SEARCH_CL_H_
+#define PCL_SEARCH_PCL_SEARCH_CL_H_
 
-#ifndef PCL_NO_PRECOMPILE
-#include <pcl/impl/instantiate.hpp>
-#include <pcl/point_types.h>
-PCL_INSTANTIATE(SearchOCL, PCL_POINT_TYPES)
-#endif    // PCL_NO_PRECOMPILE
+#include <pcl/ocl/search/search.h>
+#include <pcl/ocl/search/kdtree.h>
+#include <pcl/ocl/search/octree.h>
+#include <pcl/ocl/search/organized.h>
+#include <pcl/ocl/search/octree_cl.h>
+#endif    // PCL_SEARCH_PCL_SEARCH_H_
 
